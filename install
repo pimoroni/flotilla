@@ -1,22 +1,46 @@
 #!/bin/bash
 
-pkgdeplist7=( "libboost-system1.50.0" "libboost-filesystem1.50.0" "libboost-program-options1.50.0" "libboost-date-time1.50.0" ) # list of the dependencies for Wheezy
-pkgdeplist8=( "libboost-system1.50.0" "libboost-filesystem1.50.0" "libboost-program-options1.50.0" "libboost-date-time1.50.0" ) # list of the dependencies for Jessie
+scriptname="install" # the name of this script
+forcesudo="yes" # whether the script requires to be ran with root privileges
+pkgdeplist=( "libboost-system1.50.0" "libboost-filesystem1.50.0" "libboost-program-options1.50.0" "libboost-date-time1.50.0" ) # list of the dependencies
 
 HOME=/home/$SUDO_USER
+UPDATE_DB=false
 
-raspbian_old () {
-    DIST_CHK=$(cat /etc/os-release | grep "wheezy")
-
-    if [ "" == "$DIST_CHK" ];then
-        false
-    else
+confirm() {
+    if [ "$FORCE" == '-y' ]; then
         true
+    else
+        read -r -p "$1 [y/N] " response < /dev/tty
+        if [[ $response =~ ^(yes|y|Y)$ ]]; then
+            true
+        else
+            false
+        fi
     fi
 }
 
-apt_pkg_req () {
-    APT_CHK=$(dpkg-query -W --showformat='${Status}\n' $1|grep "install ok installed")
+success() {
+    echo "$(tput setaf 2)$1$(tput sgr0)"
+}
+
+warning() {
+    echo "$(tput setaf 1)$1$(tput sgr0)"
+}
+
+newline() {
+    echo ""
+}
+
+sudocheck() {
+    if [ $(id -u) -ne 0 ]; then
+        echo -e "Install must be run as root. Try 'sudo ./$scriptname'\n"
+        exit 1
+    fi
+}
+
+apt_pkg_req() {
+    APT_CHK=$(dpkg-query -W -f='${Status}\n' $1 2> /dev/null | grep "install ok installed")
 
     if [ "" == "$APT_CHK" ]; then
         true
@@ -25,59 +49,41 @@ apt_pkg_req () {
     fi
 }
 
-if [ $(id -u) -ne 0 ]; then
-    printf "Install must be run as root. Try 'sudo ./install'\n"
-    exit 1
+apt_pkg_install() {
+    \curl -sS get.pimoroni.com/package | sudo bash -s - $1 || { warning "Sorry, Apt failed to install $1, I can't continue!" && exit 1; }
+}
+
+if [ $forcesudo == "yes" ]; then
+    sudocheck
 fi
 
 if [ -f $HOME/.config/autostart/flotilla.desktop ]; then
-    printf "Removing redundant file $HOME/.config/autostart/flotilla.desktop\n"
+    echo "Removing redundant file $HOME/.config/autostart/flotilla.desktop" && newline
     rm -f $HOME/.config/autostart/flotilla.desktop
 fi
 
-printf "Installing dependencies...\n"
+echo "Installing dependencies..." && newline
 
-updatedb=false
-
-if ! raspbian_old; then
-    for pkgdep in ${pkgdeplist8[@]}
-        do if apt_pkg_req "$pkgdep" ; then
-            updatedb=true
-        fi
-        done
-
-    if $updatedb ; then
-        printf "\nUpdating package indexes..."
-        sudo apt-get update
+for pkgdep in ${pkgdeplist[@]}
+    do if apt_pkg_req "$pkgdep" ; then
+        UPDATE_DB=true
     fi
+done
 
-    for pkgdep in ${pkgdeplist8[@]}
-        do printf "Checking for dependencies...\n"
-        if apt_pkg_req "$pkgdep" ; then
-            sudo apt-get --yes --force-yes install "$pkgdep"
-        fi
-        done
-else
-    for pkgdep in ${pkgdeplist7[@]}
-        do if apt_pkg_req "$pkgdep" ; then
-            updatedb=true
-        fi
-        done
-    if $updatedb ; then
-        printf "\nUpdating package indexes..."
-        sudo apt-get update
-    fi
-
-    for pkgdep in ${pkgdeplist7[@]}
-        do printf "Checking for dependencies...\n"
-        if apt_pkg_req "$pkgdep" ; then
-            sudo apt-get --yes --force-yes install "$pkgdep"
-        fi
-        done
+if $UPDATE_DB ; then
+    echo "Updating package indexes..."
+    sudo apt-get update
 fi
 
+for pkgdep in ${pkgdeplist[@]}
+    do echo "Checking for dependencies..." && newline
+    if apt_pkg_req "$pkgdep" ; then
+        sudo apt-get --yes --force-yes install "$pkgdep"
+    fi
+done
+
 if [ -f /usr/local/lib/libserialport.so.0.0.0 ]; then
-    printf "libserialport already installed. Updating...\n"
+    echo "libserialport already installed. Updating..." && newline
 fi
 
 cp ./dependencies/libs/libserialport* /usr/local/lib/
@@ -94,40 +100,30 @@ chown root:staff /usr/local/lib/libserialport*
 ldconfig
 
 if [ ! -f /usr/bin/flotilla ]; then
-    printf "Installing Flotilla daemon...\n"
-    if ! raspbian_old; then
-        cp flotilla /usr/bin/flotilla
-        chmod +x /usr/bin/flotilla
-    else
-        cp flotilla-wheezy /usr/bin/flotilla
-        chmod +x /usr/bin/flotilla
-    fi
+    echo "Installing Flotilla daemon..." && newline
+    cp flotilla /usr/bin/flotilla
+    chmod +x /usr/bin/flotilla
 else
-    printf "Flotilla already installed. Updating...\n"
-    if ! raspbian_old; then
-        cp flotilla /usr/bin/flotilla
-        chmod +x /usr/bin/flotilla
-    else
-        cp flotilla-wheezy /usr/bin/flotilla
-        chmod +x /usr/bin/flotilla
-    fi
+    echo "Flotilla already installed. Updating..." && newline
+    cp flotilla /usr/bin/flotilla
+    chmod +x /usr/bin/flotilla
 fi
 
 if [ ! -f /etc/init.d/flotillad ]; then
-    printf "Setting up init script...\n"
+    echo "Setting up init script..." && newline
     cp dependencies/flotillad /etc/init.d/
     chmod +x /etc/init.d/flotillad
     update-rc.d flotillad defaults
     /etc/init.d/flotillad start &
 else
-    printf "Init script already on system. Updating...\n"
+    echo "Init script already on system. Updating..." && newline
     cp dependencies/flotillad /etc/init.d/
     chmod +x /etc/init.d/flotillad
     update-rc.d flotillad defaults
     /etc/init.d/flotillad restart &
 fi
 
-printf "Installing Rockpool...\n"
+echo "Installing Rockpool..." && newline
 
 cp -r rockpool /opt
 cp dependencies/rockpool /usr/sbin/
@@ -135,6 +131,6 @@ chmod +x /usr/sbin/rockpool
 cp dependencies/rockpool.png /usr/share/pixmaps/
 cp dependencies/rockpool.desktop /usr/share/applications/
 
-printf "\nAll done! Time to set sail.\n"
+echo "All done! Time to set sail." && newline
 
 exit 0
